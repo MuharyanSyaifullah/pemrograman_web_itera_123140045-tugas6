@@ -1,88 +1,122 @@
+import json
 from pyramid.view import view_config
 from pyramid.response import Response
+from pyramid.httpexceptions import HTTPNotFound, HTTPBadRequest
+
 from ..models import Matakuliah
-import json
 
 
-# GET semua matakuliah
-@view_config(route_name='matakuliah_list', request_method='GET', renderer='json')
-def get_all_matakuliah(request):
-    data = request.dbsession.query(Matakuliah).all()
-    return [mk.to_dict() for mk in data]
+def _json(payload, status=200):
+    return Response(
+        body=json.dumps(payload),
+        status=status,
+        content_type="application/json",
+    )
 
 
-# GET detail matakuliah
-@view_config(route_name='matakuliah_detail', request_method='GET', renderer='json')
-def get_matakuliah(request):
-    mk_id = int(request.matchdict['id'])
-    mk = request.dbsession.query(Matakuliah).get(mk_id)
+def _get_json_body(request):
+    try:
+        return request.json_body
+    except Exception:
+        raise HTTPBadRequest(json.dumps({"error": "Body harus JSON"}))
 
+
+def _validate(data, partial=False):
+    required = ["kode_mk", "nama_mk", "sks", "semester"]
+    if not partial:
+        missing = [k for k in required if k not in data]
+        if missing:
+            raise HTTPBadRequest(json.dumps({"error": f"Field wajib: {', '.join(missing)}"}))
+
+    if "kode_mk" in data:
+        if not str(data["kode_mk"]).strip():
+            raise HTTPBadRequest(json.dumps({"error": "kode_mk tidak boleh kosong"}))
+
+    if "nama_mk" in data:
+        if not str(data["nama_mk"]).strip():
+            raise HTTPBadRequest(json.dumps({"error": "nama_mk tidak boleh kosong"}))
+
+    if "sks" in data:
+        if not isinstance(data["sks"], int) or data["sks"] <= 0:
+            raise HTTPBadRequest(json.dumps({"error": "sks harus integer > 0"}))
+
+    if "semester" in data:
+        if not isinstance(data["semester"], int) or data["semester"] <= 0:
+            raise HTTPBadRequest(json.dumps({"error": "semester harus integer > 0"}))
+
+
+@view_config(route_name="matakuliah_list")
+def matakuliah_list(request):
+    data = request.dbsession.query(Matakuliah).order_by(Matakuliah.id.asc()).all()
+    return _json([m.to_dict() for m in data])
+
+
+@view_config(route_name="matakuliah_detail")
+def matakuliah_detail(request):
+    mk_id = request.matchdict.get("id", "")
+    if not mk_id.isdigit():
+        raise HTTPBadRequest(json.dumps({"error": "id harus angka"}))
+
+    mk = request.dbsession.get(Matakuliah, int(mk_id))
     if not mk:
-        return Response(
-            json.dumps({'error': 'Matakuliah tidak ditemukan'}),
-            status=404,
-            content_type='application/json'
-        )
+        raise HTTPNotFound(json.dumps({"error": "Matakuliah tidak ditemukan"}))
 
-    return mk.to_dict()
+    return _json(mk.to_dict())
 
 
-# POST tambah matakuliah
-@view_config(route_name='matakuliah_list', request_method='POST', renderer='json')
-def create_matakuliah(request):
-    data = request.json_body
+@view_config(route_name="matakuliah_create")
+def matakuliah_create(request):
+    data = _get_json_body(request)
+    _validate(data, partial=False)
 
     mk = Matakuliah(
-        kode_mk=data['kode_mk'],
-        nama_mk=data['nama_mk'],
-        sks=data['sks'],
-        semester=data['semester']
+        kode_mk=str(data["kode_mk"]).strip(),
+        nama_mk=str(data["nama_mk"]).strip(),
+        sks=int(data["sks"]),
+        semester=int(data["semester"]),
     )
 
     request.dbsession.add(mk)
-    request.dbsession.commit()
+    request.dbsession.flush()  # supaya id terisi
 
-    return {'message': 'Matakuliah berhasil ditambahkan'}
+    return _json(mk.to_dict(), status=201)
 
 
-# PUT update matakuliah
-@view_config(route_name='matakuliah_detail', request_method='PUT', renderer='json')
-def update_matakuliah(request):
-    mk_id = int(request.matchdict['id'])
-    data = request.json_body
+@view_config(route_name="matakuliah_update")
+def matakuliah_update(request):
+    mk_id = request.matchdict.get("id", "")
+    if not mk_id.isdigit():
+        raise HTTPBadRequest(json.dumps({"error": "id harus angka"}))
 
-    mk = request.dbsession.query(Matakuliah).get(mk_id)
+    mk = request.dbsession.get(Matakuliah, int(mk_id))
     if not mk:
-        return Response(
-            json.dumps({'error': 'Matakuliah tidak ditemukan'}),
-            status=404,
-            content_type='application/json'
-        )
+        raise HTTPNotFound(json.dumps({"error": "Matakuliah tidak ditemukan"}))
 
-    mk.kode_mk = data['kode_mk']
-    mk.nama_mk = data['nama_mk']
-    mk.sks = data['sks']
-    mk.semester = data['semester']
+    data = _get_json_body(request)
+    _validate(data, partial=True)
 
-    request.dbsession.commit()
+    if "kode_mk" in data:
+        mk.kode_mk = str(data["kode_mk"]).strip()
+    if "nama_mk" in data:
+        mk.nama_mk = str(data["nama_mk"]).strip()
+    if "sks" in data:
+        mk.sks = int(data["sks"])
+    if "semester" in data:
+        mk.semester = int(data["semester"])
 
-    return {'message': 'Matakuliah berhasil diupdate'}
+    request.dbsession.flush()
+    return _json(mk.to_dict())
 
 
-# DELETE hapus matakuliah
-@view_config(route_name='matakuliah_detail', request_method='DELETE', renderer='json')
-def delete_matakuliah(request):
-    mk_id = int(request.matchdict['id'])
-    mk = request.dbsession.query(Matakuliah).get(mk_id)
+@view_config(route_name="matakuliah_delete")
+def matakuliah_delete(request):
+    mk_id = request.matchdict.get("id", "")
+    if not mk_id.isdigit():
+        raise HTTPBadRequest(json.dumps({"error": "id harus angka"}))
 
+    mk = request.dbsession.get(Matakuliah, int(mk_id))
     if not mk:
-        return Response(
-            json.dumps({'error': 'Matakuliah tidak ditemukan'}),
-            status=404,
-            content_type='application/json'
-        )
+        raise HTTPNotFound(json.dumps({"error": "Matakuliah tidak ditemukan"}))
 
     request.dbsession.delete(mk)
-    request.dbsession.commit()
-
-    return {'message': 'Matakuliah berhasil dihapus'}
+    return _json({"message": "Berhasil dihapus"})
